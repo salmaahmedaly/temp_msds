@@ -9,115 +9,105 @@ import (
 
 const PORT = ":1234"
 
+
+// Default handler - Landing page
 func defaultHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println("Serving:", r.URL.Path, "from", r.Host)
 	w.WriteHeader(http.StatusOK)
-	Body := "Welcome to the MSDS Course Catalog!\n"
-	fmt.Fprintf(w, "%s", Body)
+	fmt.Fprintf(w, "Welcome to the MSDS Course Catalog API!\n")
 }
 
 // ✅ DELETE Handler: Remove a course by ID
 func deleteHandler(w http.ResponseWriter, r *http.Request) {
-	// Extract course ID from URL
 	paramStr := strings.Split(r.URL.Path, "/")
-	fmt.Println("Path:", paramStr)
 	if len(paramStr) < 3 {
-		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprintln(w, "Not found: "+r.URL.Path)
+		http.Error(w, "Not enough arguments. Usage: /delete/CID", http.StatusBadRequest)
 		return
 	}
-
-	log.Println("Serving:", r.URL.Path, "from", r.Host)
 
 	courseID := paramStr[2]
-	err := deleteCourse(courseID) // Calls deleteCourse() from courses.go
+	err := deleteCourse(courseID) // Calls deleteCourse() from main.go
+
 	if err != nil {
-		fmt.Println(err)
-		Body := err.Error() + "\n"
-		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprintf(w, "%s", Body)
+		http.Error(w, "Failed to delete course: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	Body := "Course " + courseID + " deleted!\n"
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "%s", Body)
+	fmt.Fprintf(w, "Course %s deleted!\n", courseID)
 }
 
-// ✅ GET Handler: List all courses
+// ✅ GET Handler: List all courses from Cloud SQL
 func listHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println("Serving:", r.URL.Path, "from", r.Host)
+
+	courses, err := fetchAllCourses() // Calls fetchAllCourses() from main.go
+	if err != nil {
+		http.Error(w, "Failed to fetch courses: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	w.WriteHeader(http.StatusOK)
-	Body := listCourses() // Calls listCourses() from courses.go
-	fmt.Fprintf(w, "%s", Body)
+	fmt.Fprintf(w, "%s", courses)
 }
 
 // ✅ STATUS Handler: Display total number of courses
 func statusHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println("Serving:", r.URL.Path, "from", r.Host)
-	w.WriteHeader(http.StatusOK)
-	Body := fmt.Sprintf("Total courses: %d\n", len(data)) // Uses data from courses.go
-	fmt.Fprintf(w, "%s", Body)
-}
 
-// ✅ POST Handler: Insert a new course
-func insertHandler(w http.ResponseWriter, r *http.Request) {
-	// Extract course details from URL path
-	paramStr := strings.Split(r.URL.Path, "/")
-	fmt.Println("Path:", paramStr)
-
-	if len(paramStr) < 5 {
-		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprintln(w, "Not enough arguments: "+r.URL.Path)
+	count, err := getTotalCourses() // Calls getTotalCourses() from main.go
+	if err != nil {
+		http.Error(w, "Failed to get course count: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	cid := paramStr[2]
-	cname := paramStr[3]
-	cprereq := paramStr[4]
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "Total courses: %d\n", count)
+}
 
-	// Create a new course struct
-	newCourse := &MSDSCourse{CID: cid, CNAME: cname, CPREREQ: cprereq}
-	err := insertCourse(newCourse) // Calls insertCourse() from courses.go
+// ✅ POST Handler: Insert a new course into Cloud SQL
+func insertHandler(w http.ResponseWriter, r *http.Request) {
+	paramStr := strings.Split(r.URL.Path, "/")
 
-	if err != nil {
-		w.WriteHeader(http.StatusNotModified)
-		Body := "Failed to add course\n"
-		fmt.Fprintf(w, "%s", Body)
-	} else {
-		log.Println("Serving:", r.URL.Path, "from", r.Host)
-		Body := "New course added successfully\n"
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, "%s", Body)
+	if len(paramStr) < 5 {
+		http.Error(w, "Not enough arguments. Usage: /insert/CID/CNAME/CPREREQ", http.StatusBadRequest)
+		return
 	}
 
-	log.Println("Serving:", r.URL.Path, "from", r.Host)
+	cid, cname, cprereq := paramStr[2], paramStr[3], paramStr[4]
+
+	newCourse := &MSDSCourse{CID: cid, CNAME: cname, CPREREQ: cprereq}
+	err := insertCourse(newCourse) // Calls insertCourse() from main.go
+
+	if err != nil {
+		http.Error(w, "Failed to insert course: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "Course added successfully: %s\n", cid)
 }
 
 // ✅ GET Handler: Search for a course by ID
 func searchHandler(w http.ResponseWriter, r *http.Request) {
-	// Extract course ID from URL
 	paramStr := strings.Split(r.URL.Path, "/")
-	fmt.Println("Path:", paramStr)
 
 	if len(paramStr) < 3 {
-		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprintln(w, "Not found: "+r.URL.Path)
+		http.Error(w, "Not enough arguments. Usage: /search/CID", http.StatusBadRequest)
 		return
 	}
 
-	var Body string
 	courseID := paramStr[2]
-	c := searchCourse(courseID) // Calls searchCourse() from courses.go
+	course, err := searchCourse(courseID) // Calls searchCourse() from main.go
 
-	if c == nil {
-		w.WriteHeader(http.StatusNotFound)
-		Body = "Could not find course: " + courseID + "\n"
-	} else {
-		w.WriteHeader(http.StatusOK)
-		Body = "Course ID: " + c.CID + "\nCourse Name: " + c.CNAME + "\nPrerequisite: " + c.CPREREQ + "\n"
+	if err == sql.ErrNoRows {
+		http.Error(w, "Course not found: "+courseID, http.StatusNotFound)
+		return
+	} else if err != nil {
+		http.Error(w, "Database error: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
 
-	fmt.Println("Serving:", r.URL.Path, "from", r.Host)
-	fmt.Fprintf(w, "%s", Body)
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "Course ID: %s\nCourse Name: %s\nPrerequisite: %s\n", course.CID, course.CNAME, course.CPREREQ)
 }

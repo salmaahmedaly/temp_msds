@@ -2,7 +2,6 @@ package main
 
 import (
 	"database/sql"
-	"encoding/csv"
 	"fmt"
 	"log"
 	"net/http"
@@ -55,194 +54,97 @@ func init() {
 
 }
 
-// Read courses from CSV (creates if missing)
-func readCSVFile(filepath string) error {
-	if _, err := os.Stat(filepath); os.IsNotExist(err) {
-		file, err := os.Create(filepath)
-		if err != nil {
-			return err
-		}
-		defer file.Close()
-		fmt.Println("Created new CSV file:", filepath)
-		return nil
-	}
 
-	f, err := os.Open(filepath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	lines, err := csv.NewReader(f).ReadAll()
-	if err != nil {
-		return err
-	}
-
-	for _, line := range lines {
-		temp := MSDSCourse{
-			CID:     line[0],
-			CNAME:   line[1],
-			CPREREQ: line[2],
-		}
-		data = append(data, temp)
-	}
-	return nil
+// ✅ Function to Create Table in Cloud SQL
+func createTable() error {
+	query := `CREATE TABLE IF NOT EXISTS MSDSCourseCatalog (
+		course_id TEXT PRIMARY KEY,
+		course_name TEXT NOT NULL,
+		prerequisite TEXT
+	);`
+	_, err := db.Exec(query)
+	return err
 }
 
-// Save courses to CSV
-func saveCSVFile(filepath string) error {
-	csvfile, err := os.Create(filepath)
-	if err != nil {
-		return err
-	}
-	defer csvfile.Close()
-
-	csvwriter := csv.NewWriter(csvfile)
-	for _, row := range data {
-		temp := []string{row.CID, row.CNAME, row.CPREREQ}
-		_ = csvwriter.Write(temp)
-	}
-	csvwriter.Flush()
-	return nil
-}
-
-// Create an index for quick lookup
-func createIndex() error {
-	index = make(map[string]int)
-	for i, k := range data {
-		index[k.CID] = i
-	}
-	return nil
-}
-
-// Insert a new course
+// ✅ Function to Insert Course into Cloud SQL
 func insertCourse(c *MSDSCourse) error {
-	if _, ok := index[c.CID]; ok {
-		return fmt.Errorf("%s already exists", c.CID)
-	}
-
-	data = append(data, *c)
-	_ = createIndex()
-
-	err := saveCSVFile(CSVFILE)
-	if err != nil {
-		return err
-	}
-	return nil
+	_, err := db.Exec("INSERT INTO MSDSCourseCatalog (course_id, course_name, prerequisite) VALUES ($1, $2, $3)",
+		c.CID, c.CNAME, c.CPREREQ)
+	return err
 }
 
-// Delete a course
+// ✅ Function to Delete Course from Cloud SQL
 func deleteCourse(courseID string) error {
-	i, ok := index[courseID]
-	if !ok {
-		return fmt.Errorf("%s not found!", courseID)
-	}
+	_, err := db.Exec("DELETE FROM MSDSCourseCatalog WHERE course_id = $1", courseID)
+	return err
+}
 
-	data = append(data[:i], data[i+1:]...)
-	delete(index, courseID)
-
-	err := saveCSVFile(CSVFILE)
+// ✅ Function to Fetch All Courses
+func fetchAllCourses() (string, error) {
+	rows, err := db.Query("SELECT course_id, course_name, prerequisite FROM MSDSCourseCatalog")
 	if err != nil {
-		return err
+		return "", err
 	}
-	return nil
+	defer rows.Close()
+
+	var result string
+	for rows.Next() {
+		var c MSDSCourse
+		if err := rows.Scan(&c.CID, &c.CNAME, &c.CPREREQ); err != nil {
+			continue
+		}
+		result += fmt.Sprintf("Course ID: %s | Name: %s | Prerequisite: %s\n", c.CID, c.CNAME, c.CPREREQ)
+	}
+	return result, nil
 }
 
-// Search for a course
-func searchCourse(courseID string) *MSDSCourse {
-	i, ok := index[courseID]
-	if !ok {
-		return nil
-	}
-	return &data[i]
+// ✅ Function to Get Total Course Count
+func getTotalCourses() (int, error) {
+	var count int
+	err := db.QueryRow("SELECT COUNT(*) FROM MSDSCourseCatalog").Scan(&count)
+	return count, err
 }
 
-// List all courses
-func listCourses() string {
-	var all string
-	for _, k := range data {
-		all = all + k.CID + " | " + k.CNAME + " | Prerequisite: " + k.CPREREQ + "\n"
+// ✅ Function to Search for a Course
+func searchCourse(courseID string) (*MSDSCourse, error) {
+	var course MSDSCourse
+	err := db.QueryRow("SELECT course_id, course_name, prerequisite FROM MSDSCourseCatalog WHERE course_id = $1", courseID).
+		Scan(&course.CID, &course.CNAME, &course.CPREREQ)
+	if err != nil {
+		return nil, err
 	}
-	return all
+	return &course, nil
 }
 
-// Main function - Start HTTP server
+// ✅ Main function - Start HTTP server
 func main() {
+	log.Print("Starting Cloud Run service...")
 
-	log.Print("Starting logging ...")
-	err := readCSVFile(CSVFILE)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
+	mux := http.NewServeMux()
+	mux.Handle("/list", http.HandlerFunc(listHandler))
+	mux.Handle("/insert/", http.HandlerFunc(insertHandler))
+	mux.Handle("/search/", http.HandlerFunc(searchHandler))
+	mux.Handle("/delete/", http.HandlerFunc(deleteHandler))
+	mux.Handle("/status", http.HandlerFunc(statusHandler))
+	mux.Handle("/", http.HandlerFunc(defaultHandler)) // Default landing page
 
-	http.HandleFunc("/", handler)
-
-	// Determine port for HTTP service.
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
-		log.Printf("defaulting to port %s", port)
 	}
 
-	// Start HTTP server.
-	log.Printf("listening on port %s", port)
-	log.Print("Navigate to Cloud Run services and find the URL of your service")
-	log.Print("Use the browser and navigate to your service URL to to check your service has started")
+	log.Printf("Listening on port %s", port)
 
-	if err := http.ListenAndServe(":"+port, nil); err != nil {
-		log.Fatal(err)
-	}
-
-	err = createIndex()
-	if err != nil {
-		fmt.Println("Cannot create index.")
-		return
-	}
-
-	mux := http.NewServeMux()
 	s := &http.Server{
-		Addr:         ":1234",
+		Addr:         ":" + port,
 		Handler:      mux,
 		IdleTimeout:  10 * time.Second,
 		ReadTimeout:  time.Second,
 		WriteTimeout: time.Second,
 	}
 
-	// Register handlers (ensure these exist in handlers.go)
-	mux.Handle("/list", http.HandlerFunc(listHandler))
-	mux.Handle("/insert/", http.HandlerFunc(insertHandler))
-	mux.Handle("/insert", http.HandlerFunc(insertHandler))
-	mux.Handle("/search", http.HandlerFunc(searchHandler))
-	mux.Handle("/search/", http.HandlerFunc(searchHandler))
-	mux.Handle("/delete/", http.HandlerFunc(deleteHandler))
-	mux.Handle("/status", http.HandlerFunc(statusHandler))
-	mux.Handle("/", http.HandlerFunc(defaultHandler))
-
-	fmt.Println("Ready to serve at :1234")
-	err = s.ListenAndServe()
+	err := s.ListenAndServe()
 	if err != nil {
-		fmt.Println(err)
-		return
+		log.Fatal(err)
 	}
 }
-
-func handler(w http.ResponseWriter, r *http.Request) {
-	name := os.Getenv("PROJECT_ID")
-	if name == "" {
-		name = "MSDS"
-	}
-
-	fmt.Fprintf(w, "started MSDS categlog %s!\n", name)
-}
-
-func createTable() error {
-    query := `CREATE TABLE IF NOT EXISTS MSDSCourseCatalog (
-        course_id TEXT PRIMARY KEY,
-        course_name TEXT NOT NULL,
-        prerequisite TEXT
-    );`
-    _, err := db.Exec(query)
-    return err
-}
-
