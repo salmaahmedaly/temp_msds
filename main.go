@@ -39,7 +39,13 @@ func init() {
 		log.Fatal(fmt.Println("Couldn't Open Connection to database"))
 		panic(err)
 	}
+	err = createTable()
+	if err != nil {
+		log.Fatal("Error creating table:", err)
+	        panic(err)
+	    }
 
+    fmt.Println("Database and table initialized successfully")
 	// Test the database connection
 	//err = db.Ping()
 	//if err != nil {
@@ -229,3 +235,14 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Fprintf(w, "started MSDS categlog %s!\n", name)
 }
+
+func createTable() error {
+    query := `CREATE TABLE IF NOT EXISTS MSDSCourseCatalog (
+        course_id TEXT PRIMARY KEY,
+        course_name TEXT NOT NULL,
+        prerequisite TEXT
+    );`
+    _, err := db.Exec(query)
+    return err
+}
+
